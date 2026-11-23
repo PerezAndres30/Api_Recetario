@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: API del recetario (HTTP API + Lambda + DynamoDB)
+
+Parameters:
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Clave secreta para firmar los tokens (mínimo 32 caracteres). Ej. openssl rand -base64 32
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Ambiente de despliegue
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 10
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref RecetasTable
+        USUARIOS_TABLE: !Ref UsuariosTable
+        JWT_SECRET: !Ref JwtSecret
+        NODE_OPTIONS: --enable-source-maps
+
+Resources:
+  # ------------------------------------------------------------ Almacenamiento
+  RecetasTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: recetaId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: recetaId
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  UsuariosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: correo
+          AttributeType: S
+      KeySchema:
+        - AttributeName: correo
+          KeyType: HASH
+
+  # ------------------------------------------------------------------- API
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+        AllowHeaders: [Authorization, Content-Type]
+
+  # ---------------------------------------------------------------- Lambdas
+  ListarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: listar.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RecetasTable
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /recetas
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/listar.ts]
+
+  ObtenerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: obtener.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RecetasTable
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /recetas/{id}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/obtener.ts]
+
+  CrearFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: crear.handler
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref RecetasTable
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /recetas
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/crear.ts]
+
+  ActualizarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: actualizar.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RecetasTable
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /recetas/{id}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/actualizar.ts]
+
+  EliminarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: eliminar.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RecetasTable
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /recetas/{id}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/eliminar.ts]
+
+  # ------------------------------------------------------- Auth (rutas públicas)
+  RegistrarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: registrar.handler
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref UsuariosTable
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /register
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/registrar.ts]
+
+  LoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: login.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UsuariosTable
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /login
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/login.ts]
+
+Outputs:
+  ApiUrl:
+    Description: URL base de la API (úsala en Retrofit)
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/
+  Region:
+    Value: !Ref AWS::Region
