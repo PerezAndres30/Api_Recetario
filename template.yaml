@@ -8,6 +8,19 @@ Parameters:
     NoEcho: true
     MinLength: 32
     Description: Clave secreta para firmar los tokens (mínimo 32 caracteres). Ej. openssl rand -base64 32
+  CloudinaryCloudName:
+    Type: String
+    MinLength: 1
+    Description: Nombre de la cuenta de Cloudinary (cloud name)
+  CloudinaryApiKey:
+    Type: String
+    MinLength: 1
+    Description: API key de Cloudinary (no es secreta, pero se mantiene fuera de la app)
+  CloudinaryApiSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: API secret de Cloudinary. Es confidencial; nunca va en la app ni en Git
   Stage:
     Type: String
     Default: dev
@@ -25,6 +38,9 @@ Globals:
         TABLE_NAME: !Ref RecetasTable
         USUARIOS_TABLE: !Ref UsuariosTable
         JWT_SECRET: !Ref JwtSecret
+        CLOUDINARY_CLOUD_NAME: !Ref CloudinaryCloudName
+        CLOUDINARY_API_KEY: !Ref CloudinaryApiKey
+        CLOUDINARY_API_SECRET: !Ref CloudinaryApiSecret
         NODE_OPTIONS: --enable-source-maps
 
 Resources:
@@ -43,6 +59,13 @@ Resources:
           KeyType: HASH
         - AttributeName: recetaId
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: recetaId-index
+          KeySchema:
+            - AttributeName: recetaId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
@@ -120,7 +143,7 @@ Resources:
       CodeUri: .
       Handler: crear.handler
       Policies:
-        - DynamoDBWritePolicy:
+        - DynamoDBCrudPolicy:
             TableName: !Ref RecetasTable
       Events:
         Http:
@@ -182,6 +205,29 @@ Resources:
         Target: es2022
         Sourcemap: true
         EntryPoints: [src/handlers/eliminar.ts]
+
+  ImagenFirmaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: imagenFirma.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RecetasTable
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /recetas/{id}/imagen-firma
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/imagenFirma.ts]
 
   # ------------------------------------------------------- Auth (rutas públicas)
   RegistrarFunction:
