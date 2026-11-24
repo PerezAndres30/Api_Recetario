@@ -24,19 +24,38 @@ export const crearInput = recetaInput.extend({
   recetaId: z.string().uuid().optional(),
 });
 
+/**
+ * En PUT la foto es opcional: si faltan ambos campos se conserva la actual; si vienen los dos
+ * (los que devuelve Cloudinary tras la subida) se valida y se guarda; con null se quita.
+ */
+export const actualizarInput = recetaInput.extend({
+  imagenUrl: z.string().max(500).nullable().optional(),
+  imagenPublicId: z.string().max(200).nullable().optional(),
+});
+
 /** Cómo se guarda una receta en DynamoDB. */
 export type Receta = z.output<typeof recetaInput> & {
   userId: string;
   recetaId: string;
+  imagenUrl?: string | null;
+  imagenPublicId?: string | null;
   tituloBusqueda: string; // título en minúsculas, para filtrar con contains()
   creadaEn: string;
   actualizadaEn: string;
 };
 
-/** Convierte el registro de DynamoDB en la respuesta pública (sin campos internos). */
-export function aRespuesta(receta: Receta) {
-  const { userId: _userId, tituloBusqueda: _busqueda, ...publico } = receta;
-  return publico;
+/**
+ * Convierte el registro de DynamoDB en la respuesta pública: no expone el id del usuario,
+ * pero indica con esPropia si la receta es de quien hace la petición (null = visitante).
+ */
+export function aRespuesta(receta: Receta, solicitanteId: string | null) {
+  const { userId, tituloBusqueda: _busqueda, imagenUrl, imagenPublicId, ...publico } = receta;
+  return {
+    ...publico,
+    imagenUrl: imagenUrl ?? null,
+    imagenPublicId: imagenPublicId ?? null,
+    esPropia: solicitanteId !== null && userId === solicitanteId,
+  };
 }
 
 // ------------------------------------------------------------------ Auth

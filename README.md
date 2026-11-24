@@ -2,13 +2,17 @@
 
 API REST serverless para la app de recetas en Kotlin.
 
-**Stack:** TypeScript (Node.js 22) · AWS SAM · API Gateway (HTTP API) · Lambda (arm64) · DynamoDB (usuarios y recetas)
+**Stack:** TypeScript (Node.js 22) · AWS SAM · API Gateway (HTTP API) · Lambda (arm64) · DynamoDB (usuarios y recetas) · Cloudinary (fotos)
 
 ```
 App Kotlin ──► API Gateway ──► Lambda (valida el token) ──► DynamoDB
-                                              ├─ tabla usuarios  (correo, nombre, hash de contraseña)
-                                              └─ tabla recetas   (por usuario)
+     │                                         ├─ tabla usuarios  (correo, nombre, hash de contraseña)
+     │                                         └─ tabla recetas   (por usuario + índice por recetaId)
+     └──(foto, con firma de la API)──► Cloudinary
 ```
+
+Las recetas son **públicas**: cualquiera puede explorarlas sin cuenta. Solo quien tiene cuenta crea recetas, y
+solo el creador puede editarlas o eliminarlas.
 
 ## Requisitos
 
@@ -43,6 +47,13 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 Copia el resultado y guárdalo: lo necesitarás en el paso 3 y en cada redespliegue.
 
+### 2b. Cuenta de Cloudinary
+
+Las fotos se alojan en Cloudinary (el plan gratuito basta: 10 MB por imagen). En el panel de tu cuenta hay tres datos:
+**cloud name**, **API key** y **API secret**. Solo el secreto es confidencial: nunca va en la app, en Git ni en un chat.
+Se pasan como parámetros de SAM (`CloudinaryCloudName`, `CloudinaryApiKey`, `CloudinaryApiSecret`) y llegan a las Lambdas
+como variables de entorno. Si el secreto se expone, se regenera en Cloudinary y se vuelve a desplegar.
+
 ### 3. Compilar y desplegar
 
 ```bash
@@ -71,6 +82,9 @@ Respuestas para `sam deploy --guided`:
 | Stack Name | `recetario-api` (o el que quieras) |
 | AWS Region | tu región (en el Learner Lab: `us-east-1`) |
 | Parameter Stage | Enter (`dev`) |
+| Parameter CloudinaryCloudName | el *cloud name* de tu cuenta |
+| Parameter CloudinaryApiKey | la *API key* de tu cuenta |
+| Parameter CloudinaryApiSecret | el *API secret* (no se muestra al escribir) |
 | Parameter JwtSecret | pega la clave del paso 2 (no se muestra al escribir) |
 | Confirm changes before deploy | `N` (o `y` si quieres revisar el cambio) |
 | Allow SAM CLI IAM role creation | Enter (`Y`) |
@@ -78,7 +92,7 @@ Respuestas para `sam deploy --guided`:
 | `<Función> has no authentication. Is this okay?` | **`y`** (aparece una vez por función). Es correcto: la API valida el token dentro de cada Lambda, y `/register` y `/login` deben ser públicas |
 | Save arguments to configuration file | Enter (`Y`) |
 
-Tarda unos minutos. Se crean la API, las 7 Lambdas y las tablas de **usuarios** y **recetas** (DynamoDB).
+Tarda unos minutos. Se crean la API, las 8 Lambdas y las tablas de **usuarios** y **recetas** (DynamoDB, la de recetas con un índice por `recetaId`).
 
 ### 4. Obtener la URL
 
@@ -103,11 +117,12 @@ Debe responder `201` con un `token` y los datos del usuario. Si responde `500`, 
 
 ### Redesplegar después de cambios
 
-`JwtSecret` no se guarda en `samconfig.toml` (por ser secreto), así que se pasa cada vez:
+Los secretos no se guardan en `samconfig.toml`, así que se pasan cada vez:
 
 ```bash
 sam build                # o: sam build -t template-learner-lab.yaml
-sam deploy --parameter-overrides JwtSecret="<tu clave>"
+sam deploy --parameter-overrides JwtSecret="<tu clave>" CloudinaryCloudName="<cuenta>" \
+  CloudinaryApiKey="<api key>" CloudinaryApiSecret="<api secret>"
 ```
 
 Usa siempre la misma clave: si cambia, los tokens ya emitidos dejan de ser válidos y los usuarios tendrán que iniciar sesión otra vez.
@@ -119,18 +134,22 @@ nombre de stack. Los usuarios y recetas anteriores no se conservan.
 
 ## Endpoints
 
-`/register` y `/login` son públicos. Las rutas de `/recetas` exigen el header
-`Authorization: Bearer <token>` con el `token` que devuelven `/register` y `/login`.
+`/register`, `/login` y la lectura de recetas (`GET /recetas`, `GET /recetas/{id}`) son **públicos**. El resto exige el
+header `Authorization: Bearer <token>` con el `token` que devuelven `/register` y `/login`. En las rutas públicas el token
+es opcional: si viene y es válido, la respuesta indica con `esPropia` si la receta es del usuario; si falta o venció, se
+trata como visitante.
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| POST | `/register` | Guarda el usuario en la base de datos y devuelve la sesión. Body: `{ nombre, correo, password }` |
-| POST | `/login` | Inicia sesión. Body: `{ correo, password }` |
-| GET | `/recetas` | Lista tus recetas. Filtros opcionales: `?categoria=postre&favorita=true&q=pastel` |
-| GET | `/recetas/{id}` | Detalle de una receta |
-| POST | `/recetas` | Crea una receta (puedes mandar tu propio `recetaId` UUID) |
-| PUT | `/recetas/{id}` | Edita una receta (reemplaza los campos editables) |
-| DELETE | `/recetas/{id}` | Elimina la receta |
+| Método | Ruta | Acceso | Descripción |
+|---|---|---|---|
+| POST | `/register` | Público | Guarda el usuario en la base de datos y devuelve la sesión. Body: `{ nombre, correo, password }` |
+| POST | `/login` | Público | Inicia sesión. Body: `{ correo, password }` |
+| GET | `/recetas` | Público | Catálogo con las recetas de todos. Filtros opcionales: `?categoria=postre&q=pastel` |
+| GET | `/recetas?mias=true` | Token | Solo las recetas del usuario. Admite además `&favorita=true` |
+| GET | `/recetas/{id}` | Público | Detalle de una receta |
+| POST | `/recetas` | Token | Crea una receta (puedes mandar tu propio `recetaId` UUID; debe ser único en toda la tabla). Es pública desde que se guarda |
+| PUT | `/recetas/{id}` | Creador | Edita una receta (reemplaza los campos editables) |
+| DELETE | `/recetas/{id}` | Creador | Elimina la receta y su foto |
+| POST | `/recetas/{id}/imagen-firma` | Creador | Devuelve la firma para subir la foto de esa receta a Cloudinary |
 
 ### Respuesta de `/register` y `/login`
 
@@ -160,10 +179,36 @@ El token dura 24 horas; pasado ese tiempo la API responde `401` y la app debe vo
 }
 ```
 
+### Respuesta de una receta
+
+Además de los campos del cuerpo, trae `recetaId`, `creadaEn`, `actualizadaEn` y:
+
+- `esPropia`: `true` si la receta es del usuario que hace la petición (siempre `false` para visitantes). La API no expone el id del autor.
+- `imagenUrl` e `imagenPublicId`: la foto en Cloudinary, o `null` si no tiene.
+
+### Fotos (Cloudinary)
+
+La app sube la foto directo a Cloudinary; la API solo firma la subida y guarda la URL. El secreto de Cloudinary nunca sale de la API.
+
+1. La receta debe existir. Si es nueva, se guarda primero sin foto (`POST /recetas`).
+2. `POST /recetas/{id}/imagen-firma` (con token del creador) devuelve:
+   `{ uploadUrl, cloudName, apiKey, timestamp, signature, publicId, allowedFormats, overwrite, invalidate }`.
+3. La app hace `POST multipart/form-data` a `uploadUrl` con los campos `file`, `api_key`, `timestamp`, `signature`, `public_id`,
+   `allowed_formats`, `overwrite` e `invalidate`, con los **mismos valores** recibidos (la firma cubre todos menos `file` y `api_key`).
+   Esta petición va **sin** el header `Authorization`. La firma dura una hora.
+4. Cloudinary responde con `secure_url` y `public_id`. La app los manda en `PUT /recetas/{id}` como `imagenUrl` e `imagenPublicId`.
+5. La API valida que sean de esa receta y de nuestra cuenta, y los guarda.
+
+En `PUT`: si no se envían `imagenUrl` e `imagenPublicId`, la foto actual se conserva; con ambos en `null` se quita (y se borra en
+Cloudinary); deben enviarse siempre juntos. El identificador de la foto es fijo por receta
+(`recetario/recetas/{recetaId}`), así que subir otra la reemplaza. Formatos permitidos: jpg, png y webp.
+Recomendación para la app: subir JPEG de máximo 1600 px por el lado largo (el plan gratuito acepta hasta 10 MB y 25 megapíxeles).
+
 ### Errores
 
 Siempre JSON: `{ "error": "mensaje" }`. En validaciones (`400`) también viene `detalles` con el campo y el motivo.
-Códigos usados: `400` datos inválidos · `401` sin token · `404` no existe · `409` id duplicado · `500` error interno.
+Códigos usados: `400` datos inválidos · `401` sin token o token inválido · `403` la receta es de otro usuario ·
+`404` no existe · `409` id duplicado · `500` error interno.
 
 ## Probar con curl
 
@@ -195,11 +240,15 @@ curl "$API/recetas" -H "Authorization: Bearer $TOKEN"
 ## Conectar la app Kotlin
 
 - **Login y registro:** la app solo usa Retrofit contra `POST /login` y `POST /register`; no necesita ningún SDK de AWS.
-- **Retrofit:** `baseUrl` = `ApiUrl` (termina en `/`). Un interceptor de OkHttp agrega `Authorization: Bearer <token>` a cada petición.
+- **Retrofit:** `baseUrl` = `ApiUrl` (termina en `/`). Un interceptor de OkHttp agrega `Authorization: Bearer <token>` a cada petición
+  cuando hay sesión; las consultas de visitantes van sin token.
+- **Fotos:** la subida a Cloudinary usa un cliente OkHttp aparte, **sin** ese interceptor.
 
 ## Seguridad (ya incluida)
 
-- Cada usuario solo accede a sus recetas: `userId` sale del token firmado, nunca del cuerpo de la petición.
+- Cualquiera puede leer las recetas, pero solo el creador las modifica, elimina o firma su foto: `userId` sale del token firmado,
+  nunca del cuerpo de la petición, y se compara con el autor guardado (403 si no coincide).
+- La API de Cloudinary firma cada subida con un identificador fijo por receta: nadie puede sobrescribir la foto de otra.
 - Contraseñas con hash scrypt y sal aleatoria; el correo es único (condición en DynamoDB).
 - El mismo mensaje de error si falla el correo o la contraseña, para no revelar qué cuentas existen.
 - Tokens firmados con HMAC-SHA256 y expiración de 24 horas.
@@ -208,7 +257,18 @@ curl "$API/recetas" -H "Authorization: Bearer $TOKEN"
 
 - Restringir `AllowOrigins` de CORS si agregas una versión web.
 - Cerrar sesión en el servidor (lista de tokens revocados) y renovar tokens con un refresh token.
-- Paginación en `GET /recetas` si algún usuario llega a tener miles de recetas.
+- Paginación en `GET /recetas`: el catálogo hace un `Scan` de toda la tabla, suficiente para pocas recetas. Con muchas, conviene un
+  índice por fecha y paginar.
+
+## Pruebas
+
+```bash
+npm install
+npm run typecheck
+npm test        # vitest: lectura pública, autenticación, propiedad (401/403/404), fotos y firma de Cloudinary
+```
+
+Las pruebas usan una tabla simulada en memoria; no tocan AWS ni Cloudinary.
 
 ## Eliminar todo
 

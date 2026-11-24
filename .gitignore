@@ -3,3 +3,5 @@ node_modules/
 samconfig.toml
 *.log
 .DS_Store
+.env
+.env.*

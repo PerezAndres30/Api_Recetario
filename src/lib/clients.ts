@@ -8,3 +8,6 @@ export const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 
 export const TABLE = process.env.TABLE_NAME as string; // recetas
 export const USUARIOS_TABLE = process.env.USUARIOS_TABLE as string;
+
+/** Índice secundario de la tabla de recetas: permite buscar una receta solo por su id. */
+export const INDICE_RECETA_ID = "recetaId-index";

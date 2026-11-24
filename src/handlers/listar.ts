@@ -1,20 +1,24 @@
-import { QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { QueryCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb, TABLE } from "../lib/clients";
-import { getUserId, json, withErrors } from "../lib/http";
+import { getUserId, getUserIdOpcional, json, withErrors } from "../lib/http";
 import { aRespuesta, type Receta } from "../lib/schema";
 
-// GET /recetas?categoria=postre&favorita=true&q=pastel
+// GET /recetas?categoria=postre&q=pastel          (público: recetas de todos)
+// GET /recetas?mias=true&favorita=true             (exige token: solo las del usuario)
 export const handler = withErrors(async (event) => {
-  const userId = getUserId(event);
-  const { categoria, favorita, q } = event.queryStringParameters ?? {};
+  const { categoria, favorita, q, mias } = event.queryStringParameters ?? {};
+  const soloMias = mias === "true";
+  // "Mis recetas" exige sesión; el catálogo público acepta visitantes (token opcional).
+  const userId = soloMias ? getUserId(event) : getUserIdOpcional(event);
 
   const filtros: string[] = [];
-  const valores: Record<string, unknown> = { ":u": userId };
+  const valores: Record<string, unknown> = {};
   if (categoria) {
     filtros.push("categoria = :c");
     valores[":c"] = categoria;
   }
-  if (favorita === "true") {
+  // "Favorita" es una marca personal del creador: solo tiene sentido en "Mis recetas".
+  if (soloMias && favorita === "true") {
     filtros.push("favorita = :f");
     valores[":f"] = true;
   }
@@ -22,24 +26,34 @@ export const handler = withErrors(async (event) => {
     filtros.push("contains(tituloBusqueda, :q)");
     valores[":q"] = q.trim().toLowerCase();
   }
+  const FilterExpression = filtros.length ? filtros.join(" AND ") : undefined;
 
-  // Un usuario tiene pocas recetas, así que se recorren todas las páginas.
+  // Se recorren todas las páginas: el proyecto maneja pocas recetas.
   const items: Receta[] = [];
   let lastKey: Record<string, unknown> | undefined;
   do {
-    const r = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE,
-        KeyConditionExpression: "userId = :u",
-        FilterExpression: filtros.length ? filtros.join(" AND ") : undefined,
-        ExpressionAttributeValues: valores,
-        ExclusiveStartKey: lastKey,
-      }),
-    );
+    const r = soloMias
+      ? await ddb.send(
+          new QueryCommand({
+            TableName: TABLE,
+            KeyConditionExpression: "userId = :u",
+            FilterExpression,
+            ExpressionAttributeValues: { ...valores, ":u": userId },
+            ExclusiveStartKey: lastKey,
+          }),
+        )
+      : await ddb.send(
+          new ScanCommand({
+            TableName: TABLE,
+            FilterExpression,
+            ExpressionAttributeValues: FilterExpression ? valores : undefined,
+            ExclusiveStartKey: lastKey,
+          }),
+        );
     items.push(...((r.Items ?? []) as Receta[]));
     lastKey = r.LastEvaluatedKey;
   } while (lastKey);
 
   items.sort((a, b) => b.actualizadaEn.localeCompare(a.actualizadaEn));
-  return json(200, { recetas: items.map(aRespuesta) });
+  return json(200, { recetas: items.map((i) => aRespuesta(i, userId)) });
 });

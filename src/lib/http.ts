@@ -28,6 +28,15 @@ export function getUserId(event: Event): string {
   return usuarioId;
 }
 
+/**
+ * Id del usuario si hay un token válido; si falta o no sirve (por ejemplo, expiró) devuelve null.
+ * Para rutas públicas: un visitante con un token vencido sigue pudiendo explorar.
+ */
+export function getUserIdOpcional(event: Event): string | null {
+  const [esquema, token] = (event.headers?.authorization ?? "").split(" ");
+  return esquema?.toLowerCase() === "bearer" && token ? leerToken(token) : null;
+}
+
 const uuid = z.string().uuid();
 
 export function getRecetaId(event: Event): string {
