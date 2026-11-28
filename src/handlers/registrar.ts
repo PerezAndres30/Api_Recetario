@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb, USUARIOS_TABLE } from "../lib/clients";
-import { HttpError, json, parseBody, withErrors } from "../lib/http";
+import { getVisitorTokenVerificado, HttpError, json, parseBody, withErrors } from "../lib/http";
+import { migrarLikesAnonimosSeguro } from "../lib/likes";
 import { hashPassword } from "../lib/password";
 import { registroInput } from "../lib/schema";
 import { aSesion, type UsuarioGuardado } from "../lib/sesion";
 
-// POST /register  (público). Guarda el usuario en DynamoDB y devuelve la sesión lista para usarse.
+// POST /register  (público; solo migra likes anónimos con X-Visitor-Token firmado por el servidor)
 export const handler = withErrors(async (event) => {
   const { nombre, correo, password } = parseBody(event, registroInput);
 
@@ -34,5 +35,16 @@ export const handler = withErrors(async (event) => {
     throw err;
   }
 
-  return json(201, aSesion(usuario));
+  const visitorIdVerificado = getVisitorTokenVerificado(event);
+  const resultadoMigracion = visitorIdVerificado
+    ? await migrarLikesAnonimosSeguro(visitorIdVerificado, usuario.usuarioId)
+    : null;
+
+  return json(
+    201,
+    aSesion(usuario, {
+      intento: visitorIdVerificado !== null,
+      resultado: resultadoMigracion,
+    }),
+  );
 });

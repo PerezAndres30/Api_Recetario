@@ -21,6 +21,7 @@ export const handler = withErrors(async (event) => {
     ...datos,
     userId,
     recetaId: recetaId ?? randomUUID(),
+    likesCount: 0,
     tituloBusqueda: datos.titulo.toLowerCase(),
     creadaEn: ahora,
     actualizadaEn: ahora,
@@ -41,5 +42,5 @@ export const handler = withErrors(async (event) => {
     throw err;
   }
 
-  return json(201, aRespuesta(receta, userId));
+  return json(201, aRespuesta(receta, userId, { leDiLike: false, esFavorito: false }));
 });
