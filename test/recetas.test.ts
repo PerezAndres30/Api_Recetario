@@ -6,7 +6,10 @@ vi.mock("../src/lib/clients", () => ({
   ddb: tabla,
   TABLE: "recetas",
   USUARIOS_TABLE: "usuarios",
+  LIKES_TABLE: "likes",
+  FAVORITOS_TABLE: "favoritos",
   INDICE_RECETA_ID: "recetaId-index",
+  INDICE_ACTOR_KEY: "actorKey-index",
 }));
 
 import { handler as actualizar } from "../src/handlers/actualizar";
@@ -106,9 +109,22 @@ describe("crear", () => {
     expect(r).toMatchObject({ statusCode: 409 });
   });
 
-  it("ignora la foto enviada al crear", async () => {
-    await crear(evento({ token: ana, body: { ...cuerpoValido, recetaId: ID_NUEVA, imagenUrl: "https://x.com/a.jpg", imagenPublicId: "x" } }));
+  it("ignora la foto y likesCount enviados al crear", async () => {
+    const r = await crear(
+      evento({
+        token: ana,
+        body: {
+          ...cuerpoValido,
+          recetaId: ID_NUEVA,
+          likesCount: 999,
+          imagenUrl: "https://x.com/a.jpg",
+          imagenPublicId: "x",
+        },
+      }),
+    );
     expect(fake.items.at(-1)?.imagenUrl).toBeUndefined();
+    expect(fake.items.at(-1)?.likesCount).toBe(0);
+    expect(cuerpo(r as { body: string }).likesCount).toBe(0);
   });
 });
 
@@ -124,10 +140,19 @@ describe("propiedad al editar", () => {
     expect(fake.items.find((i) => i.recetaId === ID_A)?.titulo).toBe("Pastel");
   });
 
-  it("el dueño edita y conserva la foto si no la menciona", async () => {
-    const r = await actualizar(evento({ id: ID_A, token: ana, body: cuerpoValido }));
+  it("el dueño edita, conserva la foto, preserva likesCount y no sobrescribe favorita histórica", async () => {
+    const original = fake.items.find((i) => i.recetaId === ID_A)!;
+    original.likesCount = 17;
+    original.favorita = true;
+
+    const r = await actualizar(evento({ id: ID_A, token: ana, body: { ...cuerpoValido, likesCount: 9999 } }));
     expect(r).toMatchObject({ statusCode: 200 });
-    expect(cuerpo(r as { body: string })).toMatchObject({ titulo: "Sopa", imagenUrl: URL_A });
+    expect(cuerpo(r as { body: string })).toMatchObject({
+      titulo: "Sopa",
+      imagenUrl: URL_A,
+      likesCount: 17,
+      favorita: true,
+    });
     expect(fetchFalso).not.toHaveBeenCalled();
   });
 

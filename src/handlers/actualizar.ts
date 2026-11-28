@@ -1,12 +1,14 @@
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
+import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { borrarImagenSegura, validarImagen } from "../lib/cloudinary";
 import { ddb, TABLE } from "../lib/clients";
+import { esRecetaFavorita } from "../lib/favoritos";
 import { getRecetaId, getUserId, HttpError, json, parseBody, withErrors } from "../lib/http";
+import { consultarLikesDeActor } from "../lib/likes";
 import { buscarReceta, exigirPropietario } from "../lib/recetas";
-import { actualizarInput, aRespuesta, type Receta } from "../lib/schema";
+import { aActorKeyUsuario, actualizarInput, aRespuesta, type Receta } from "../lib/schema";
 
-// PUT /recetas/{id}  (solo el creador; reemplaza los campos editables)
+// PUT /recetas/{id}  (solo el creador; preserva likesCount ante concurrencia y el campo histórica favorita si se omite)
 export const handler = withErrors(async (event) => {
   const userId = getUserId(event);
   const recetaId = getRecetaId(event);
@@ -29,24 +31,48 @@ export const handler = withErrors(async (event) => {
     throw new HttpError(400, "imagenUrl e imagenPublicId deben enviarse juntos");
   }
 
-  const nueva: Receta = {
-    ...campos,
-    ...foto,
-    userId,
-    recetaId,
-    tituloBusqueda: campos.titulo.toLowerCase(),
-    creadaEn: actual.creadaEn,
-    actualizadaEn: new Date().toISOString(),
-  };
+  const actualizadaEn = new Date().toISOString();
+  const favoritaPreservada = campos.favorita ?? actual.favorita ?? false;
 
+  let actualizada: Receta;
   try {
-    await ddb.send(
-      new PutCommand({
+    const res = await ddb.send(
+      new UpdateCommand({
         TableName: TABLE,
-        Item: nueva,
+        Key: { userId, recetaId },
+        UpdateExpression:
+          "SET titulo = :titulo, descripcion = :descripcion, categoria = :categoria, " +
+          "tiempoMinutos = :tiempoMinutos, porciones = :porciones, ingredientes = :ingredientes, " +
+          "pasos = :pasos, favorita = :favorita, imagenUrl = :imagenUrl, " +
+          "imagenPublicId = :imagenPublicId, tituloBusqueda = :tituloBusqueda, " +
+          "actualizadaEn = :actualizadaEn, likesCount = if_not_exists(likesCount, :cero)",
         ConditionExpression: "attribute_exists(recetaId)",
+        ExpressionAttributeValues: {
+          ":titulo": campos.titulo,
+          ":descripcion": campos.descripcion,
+          ":categoria": campos.categoria,
+          ":tiempoMinutos": campos.tiempoMinutos,
+          ":porciones": campos.porciones,
+          ":ingredientes": campos.ingredientes,
+          ":pasos": campos.pasos,
+          ":favorita": favoritaPreservada,
+          ":imagenUrl": foto.imagenUrl,
+          ":imagenPublicId": foto.imagenPublicId,
+          ":tituloBusqueda": campos.titulo.toLowerCase(),
+          ":actualizadaEn": actualizadaEn,
+          ":cero": 0,
+        },
+        ReturnValues: "ALL_NEW",
       }),
     );
+    actualizada = (res.Attributes as Receta | undefined) ?? {
+      ...actual,
+      ...campos,
+      ...foto,
+      favorita: favoritaPreservada,
+      tituloBusqueda: campos.titulo.toLowerCase(),
+      actualizadaEn,
+    };
   } catch (err) {
     if (err instanceof ConditionalCheckFailedException) {
       throw new HttpError(404, "Receta no encontrada");
@@ -54,6 +80,17 @@ export const handler = withErrors(async (event) => {
     throw err;
   }
 
+  const [likedIds, esFavorito] = await Promise.all([
+    consultarLikesDeActor([recetaId], aActorKeyUsuario(userId)),
+    esRecetaFavorita(userId, recetaId),
+  ]);
+
   await borrarImagenSegura(imagenABorrar);
-  return json(200, aRespuesta(nueva, userId));
+  return json(
+    200,
+    aRespuesta(actualizada, userId, {
+      leDiLike: likedIds.has(recetaId),
+      esFavorito,
+    }),
+  );
 });

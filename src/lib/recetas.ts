@@ -1,5 +1,6 @@
 import { QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb, INDICE_RECETA_ID, TABLE } from "./clients";
+import { batchGetConReintentos, type OpcionesReintentoBatch } from "./dynamo";
 import { HttpError } from "./http";
 import type { Receta } from "./schema";
 
@@ -15,6 +16,18 @@ export async function buscarReceta(recetaId: string): Promise<Receta | undefined
     }),
   );
   return r.Items?.[0] as Receta | undefined;
+}
+
+/** Recupera múltiples recetas por su clave primaria compuesta (userId, recetaId) vía BatchGet. */
+export async function buscarRecetasPorClaves(
+  claves: Array<{ userId: string; recetaId: string }>,
+  opciones?: OpcionesReintentoBatch,
+): Promise<Receta[]> {
+  return batchGetConReintentos<Receta>(
+    TABLE,
+    claves.map(({ userId, recetaId }) => ({ userId, recetaId })),
+    opciones,
+  );
 }
 
 /** 404 si no existe, 403 si existe pero es de otro usuario. */
