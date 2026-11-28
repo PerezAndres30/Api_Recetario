@@ -37,6 +37,8 @@ Globals:
       Variables:
         TABLE_NAME: !Ref RecetasTable
         USUARIOS_TABLE: !Ref UsuariosTable
+        LIKES_TABLE: !Ref LikesTable
+        FAVORITOS_TABLE: !Ref FavoritosTable
         JWT_SECRET: !Ref JwtSecret
         CLOUDINARY_CLOUD_NAME: !Ref CloudinaryCloudName
         CLOUDINARY_API_KEY: !Ref CloudinaryApiKey
@@ -80,15 +82,62 @@ Resources:
         - AttributeName: correo
           KeyType: HASH
 
+  LikesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: recetaId
+          AttributeType: S
+        - AttributeName: actorKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: recetaId
+          KeyType: HASH
+        - AttributeName: actorKey
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: actorKey-index
+          KeySchema:
+            - AttributeName: actorKey
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+
+  FavoritosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: recetaId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: recetaId
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: recetaId-index
+          KeySchema:
+            - AttributeName: recetaId
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+
   # ------------------------------------------------------------------- API
   Api:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: !Ref Stage
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 25
       CorsConfiguration:
         AllowOrigins: ["*"]
         AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
-        AllowHeaders: [Authorization, Content-Type]
+        AllowHeaders: [Authorization, Content-Type, X-Visitor-Id, X-Visitor-Token]
 
   # ---------------------------------------------------------------- Lambdas
   ListarFunction:
@@ -216,6 +265,133 @@ Resources:
         Target: es2022
         Sourcemap: true
         EntryPoints: [src/handlers/imagenFirma.ts]
+
+  # -------------------------------------------------- Likes y Favoritos (nuevos)
+  VisitanteSesionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: visitanteSesion.handler
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /visitante/sesion
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/visitanteSesion.ts]
+
+  LikeDarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: likeDar.handler
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /recetas/{id}/like
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/likeDar.ts]
+
+  LikeQuitarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: likeQuitar.handler
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /recetas/{id}/like
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/likeQuitar.ts]
+
+  FavoritosListarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: favoritosListar.handler
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /favoritos
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/favoritosListar.ts]
+
+  FavoritoGuardarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: favoritoGuardar.handler
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /favoritos/{id}
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/favoritoGuardar.ts]
+
+  FavoritoQuitarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: favoritoQuitar.handler
+      Role: !Sub arn:aws:iam::${AWS::AccountId}:role/LabRole
+      Events:
+        Http:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /favoritos/{id}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/favoritoQuitar.ts]
 
   # ------------------------------------------------------- Auth (rutas públicas)
   RegistrarFunction:
